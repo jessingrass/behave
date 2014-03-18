@@ -54,6 +54,10 @@ class ConfigError(Exception):
 
 
 options = [
+    (('-b', '--browser'),
+     dict(action='store', dest='browser',
+          default='firefox',
+          help='Which browser to use for test.')),
     (('-c', '--no-color'),
      dict(action='store_false', dest='color',
           help="Disable the use of ANSI color escapes.")),
@@ -425,6 +429,7 @@ parser.add_argument('paths', nargs='*',
 
 class Configuration(object):
     defaults = dict(
+        browser='firefox',
         color=sys.platform != 'win32',
         show_snippets=True,
         show_skipped=True,
