@@ -77,6 +77,11 @@ options = [
           help="""Don't run feature files matching regular expression
                   PATTERN.""")),
 
+    (('--env',),
+     dict(action='store', dest='environment',
+          default='qa',
+          help='Which url to use for test.')),
+
     (('-i', '--include'),
      dict(metavar="PATTERN", dest='include_re',
           help="Only run feature files matching regular expression PATTERN.")),
@@ -431,6 +436,7 @@ class Configuration(object):
     defaults = dict(
         browser='firefox',
         color=sys.platform != 'win32',
+        environment='qa',
         show_snippets=True,
         show_skipped=True,
         dry_run=False,
