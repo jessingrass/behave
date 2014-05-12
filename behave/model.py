@@ -5,7 +5,6 @@ import copy
 import difflib
 import itertools
 import os.path
-import sys
 import time
 import traceback
 from behave import step_registry
@@ -292,17 +291,15 @@ class Feature(TagAndStatusStatement, Replayable):
 
     type = "feature"
 
-    def __init__(self, filename, line, keyword, name, tags=None,
-                 description=None, scenarios=None, background=None):
-        tags = tags or []
+    def __init__(self, filename, line, keyword, name, tags=[], description=[],
+                 scenarios=[], background=None):
         super(Feature, self).__init__(filename, line, keyword, name, tags)
         self.description = description or []
         self.scenarios = []
         self.background = background
         self.parser = None
-        if scenarios:
-            for scenario in scenarios:
-                self.add_scenario(scenario)
+        for scenario in scenarios:
+            self.add_scenario(scenario)
 
     def reset(self):
         '''
@@ -350,8 +347,10 @@ class Feature(TagAndStatusStatement, Replayable):
 
     @property
     def duration(self):
-        # -- NEW: Background is executed N times, now part of scenarios.
-        feature_duration = 0.0
+        if self.background:
+            feature_duration = self.background.duration or 0.0
+        else:
+            feature_duration = 0.0
         for scenario in self.scenarios:
             feature_duration += scenario.duration
         return feature_duration
@@ -422,9 +421,6 @@ class Feature(TagAndStatusStatement, Replayable):
         self.should_skip = True
         for scenario in self.scenarios:
             scenario.mark_skipped()
-        else:
-            # -- SPECIAL CASE: Feature without scenarios
-            self._cached_status = "skipped"
         assert self.status == "skipped"
 
     def run(self, runner):
@@ -451,7 +447,7 @@ class Feature(TagAndStatusStatement, Replayable):
                 formatter.background(self.background)
 
         failed_count = 0
-        for scenario in self.scenarios:
+        for scenario in self:
             # -- OPTIONAL: Select scenario by name (regular expressions).
             if (runner.config.name and
                     not runner.config.name_re.search(scenario.name)):
@@ -464,10 +460,6 @@ class Feature(TagAndStatusStatement, Replayable):
                 if runner.config.stop or runner.aborted:
                     # -- FAIL-EARLY: Stop after first failure.
                     break
-        else:
-            if not run_feature:
-                # -- SPECIAL CASE: Feature without scenarios:
-                self._cached_status = 'skipped'
 
         if run_feature:
             runner.run_hook('after_feature', runner.context, self)
@@ -520,7 +512,7 @@ class Background(BasicStatement, Replayable):
     '''
     type = "background"
 
-    def __init__(self, filename, line, keyword, name, steps=None):
+    def __init__(self, filename, line, keyword, name, steps=[]):
         super(Background, self).__init__(filename, line, keyword, name)
         self.steps = steps or []
 
@@ -604,9 +596,8 @@ class Scenario(TagAndStatusStatement, Replayable):
     '''
     type = "scenario"
 
-    def __init__(self, filename, line, keyword, name, tags=None, steps=None,
+    def __init__(self, filename, line, keyword, name, tags=[], steps=[],
                  description=None):
-        tags = tags or []
         super(Scenario, self).__init__(filename, line, keyword, name, tags)
         self.description = description or []
         self.steps = steps or []
@@ -693,7 +684,6 @@ class Scenario(TagAndStatusStatement, Replayable):
 
     @property
     def duration(self):
-        # -- ORIG: for step in self.steps:  Background steps were excluded.
         scenario_duration = 0
         for step in self.all_steps:
             scenario_duration += step.duration
@@ -746,9 +736,6 @@ class Scenario(TagAndStatusStatement, Replayable):
         for step in self.all_steps:
             assert step.status == "untested" or step.status == "skipped"
             step.status = "skipped"
-        else:
-            # -- SPECIAL CASE: Scenario without steps
-            self._cached_status = "skipped"
         assert self.status == "skipped", "OOPS: scenario.status=%s" % self.status
 
     def run(self, runner):
@@ -795,15 +782,11 @@ class Scenario(TagAndStatusStatement, Replayable):
                 found_step = step_registry.registry.find_match(step)
                 if not found_step:
                     step.status = 'undefined'
-                    runner.undefined_steps.append(step)
+                    runner.undefined.append(step)
             else:
                 # -- SKIP STEPS: For disabled scenario.
                 # NOTE: Undefined steps are not detected (by intention).
                 step.status = 'skipped'
-        else:
-            if not run_scenario:
-                # -- SPECIAL CASE: Scenario without steps.
-                self._cached_status = 'skipped'
 
         # Attach the stdout and stderr if generate Junit report
         if runner.config.junit:
@@ -894,8 +877,8 @@ class ScenarioOutline(Scenario):
     '''
     type = "scenario_outline"
 
-    def __init__(self, filename, line, keyword, name, tags=None,
-                 steps=None, examples=None, description=None):
+    def __init__(self, filename, line, keyword, name, tags=[],
+                 steps=[], examples=[], description=None):
         super(ScenarioOutline, self).__init__(filename, line, keyword, name,
                                               tags, steps, description)
         self.examples = examples or []
@@ -965,9 +948,6 @@ class ScenarioOutline(Scenario):
         self.should_skip = True
         for scenario in self.scenarios:
             scenario.mark_skipped()
-        else:
-            # -- SPECIAL CASE: ScenarioOutline without scenarios/examples
-            self._cached_status = "skipped"
         assert self.status == "skipped"
 
     def run(self, runner):
@@ -1096,22 +1076,16 @@ class Step(BasicStatement, Replayable):
         self.table = table
 
         self.status = 'untested'
-        self.duration = 0
-        self.exception = None
-        self.exc_traceback = None
+        self.duration = 0.0
         self.error_message = None
+        self.exception = None
 
     def reset(self):
         '''Reset temporary runtime data to reach clean state again.'''
         self.status = 'untested'
-        self.duration = 0
-        self.exception = None
-        self.exc_traceback = None
+        self.duration = 0.0
         self.error_message = None
-
-    def store_exception_context(self, exception):
-        self.exception = exception
-        self.exc_traceback = sys.exc_info()[2]
+        self.exception = None
 
     def __repr__(self):
         return '<%s "%s">' % (self.step_type, self.name)
@@ -1136,12 +1110,13 @@ class Step(BasicStatement, Replayable):
 
     def run(self, runner, quiet=False, capture=True):
         # -- RESET: Run information.
-        self.exception = self.exc_traceback = self.error_message = None
+        self.error_message = None
+        self.exception = None
 
         # access module var here to allow test mocking to work
         match = step_registry.registry.find_match(self)
         if match is None:
-            runner.undefined_steps.append(self)
+            runner.undefined.append(self)
             if not quiet:
                 for formatter in runner.formatters:
                     formatter.match(NoMatch())
@@ -1160,8 +1135,7 @@ class Step(BasicStatement, Replayable):
                 formatter.match(match)
 
         runner.run_hook('before_step', runner.context, self)
-        if capture:
-            runner.start_capture()
+        runner.start_capture()
 
         try:
             start = time.time()
@@ -1172,27 +1146,27 @@ class Step(BasicStatement, Replayable):
             runner.context.table = self.table
             match.run(runner.context)
             self.status = 'passed'
-        except KeyboardInterrupt, e:
-            runner.aborted = True
-            error = u"ABORTED: By user (KeyboardInterrupt)."
-            self.status = 'failed'
-            self.store_exception_context(e)
         except AssertionError, e:
             self.status = 'failed'
-            self.store_exception_context(e)
+            self.exception = e
             if e.args:
                 error = u'Assertion Failed: %s' % e
             else:
                 # no assertion text; format the exception
                 error = traceback.format_exc()
+        except KeyboardInterrupt, e:
+            runner.aborted = True
+            error = u"ABORTED: By user (KeyboardInterrupt)."
+            self.status = 'failed'
+            self.exception = e
         except Exception, e:
             self.status = 'failed'
             error = traceback.format_exc()
-            self.store_exception_context(e)
+            self.exception = e
 
         self.duration = time.time() - start
-        if capture:
-            runner.stop_capture()
+
+        runner.stop_capture()
 
         # flesh out the failure with details
         if self.status == 'failed':
@@ -1253,14 +1227,13 @@ class Table(Replayable):
     '''
     type = "table"
 
-    def __init__(self, headings, line=None, rows=None):
+    def __init__(self, headings, line=None, rows=[]):
         Replayable.__init__(self)
         self.headings = headings
         self.line = line
         self.rows = []
-        if rows:
-            for row in rows:
-                self.add_row(row, line)
+        for row in rows:
+            self.add_row(row, line)
 
     def add_row(self, row, line=None):
         self.rows.append(Row(self.headings, row, line))
@@ -1613,13 +1586,3 @@ class NoMatch(Match):
         self.func = None
         self.arguments = []
         self.location = None
-
-
-def reset_model(model_elements):
-    """
-    Reset the test run information stored in model elements.
-
-    :param model_elements:  List of model elements (Feature, Scenario, ...)
-    """
-    for model_element in model_elements:
-        model_element.reset()
