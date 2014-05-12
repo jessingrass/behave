@@ -58,6 +58,7 @@ options = [
      dict(action='store', dest='browser',
           default='firefox',
           help='Which browser to use for test.')),
+    
     (('-c', '--no-color'),
      dict(action='store_false', dest='color',
           help="Disable the use of ANSI color escapes.")),
