@@ -93,7 +93,7 @@ options = [
 
     (('--env',),
      dict(action='store', dest='environment',
-          default='qa',
+          default='bitly.org',
           help='Which url to use for test.')),
 
     (('-i', '--include'),
